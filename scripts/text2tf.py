@@ -297,6 +297,8 @@ grad = grads[0]
 hess = tf.hessians(l,logrtheta)[0]
 hess = tf.identity(hess,name="loss_hessian")
 
+hessinv = tf.matrix_inverse(hess)
+
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
 tree = ROOT.TTree("fitresults", "fitresults")
@@ -341,9 +343,25 @@ for syst in DC.systs:
   tree.Branch('%s_In' % systname, ttheta0val, '%s_In/F' % systname)
   tree.Branch('%s_err' % systname, tthetaerr, '%s_err/F' % systname)
 
+
+globalinit = tf.global_variables_initializer()
+nexpnomassign = tf.assign(nexpnom,nexp)
+asimovassign = tf.assign(nobs,nexp)
+asimovrandomizestart = tf.assign(logrtheta,tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample())
+dataassign = tf.assign(nobs,data_obs)
+bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
+toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
+frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=thetav.shape,dtype=dtype))
+thetastartassign = tf.assign(logrtheta, tf.concat([logr,theta0],axis=0))
+bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=thetav.shape,dtype=dtype)],axis=0))
+
+
+xtol = np.finfo(dtype).eps
+minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+
 #initialize tf session
 sess = tf.Session()
-sess.run(tf.global_variables_initializer())
+sess.run(globalinit)
 
 print("min norm = %e" % np.amin(norm))
 print("min nexp = %e" % np.amin(sess.run(nexp)))
@@ -352,14 +370,12 @@ ntoys = options.toys
 if ntoys <= 0:
   ntoys = 1
 
-xtol = np.finfo(dtype).eps
-
 #set likelihood offset
-sess.run(nexpnom.assign(nexp))
+sess.run(nexpnomassign)
 
 #prefit to data if needed
 if options.toys>0 and options.toysFrequentist and not options.bypassFrequentistFit:  
-  minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+  sess.run(nexpnomassign)
   ret = minimizer.minimize(sess)
   logrthetav = sess.run(thetav)
 
@@ -371,46 +387,43 @@ def printstep(x,y):
 
 for itoy in range(ntoys):
   titoy[0] = itoy
-  
-  sess.run(logrtheta.assign(logrthetav))
+
+  #reset all variables
+  sess.run(globalinit)
     
   dofit = True
   
   if options.toys < 0:
     print("Running fit to asimov toy")
-    sess.run(nobs.assign(nexp))
+    sess.run(asimovassign)
     if options.randomizeStart:
-      hessval = sess.run(hess)
-      invhess = np.linalg.inv(hessval)
-      sess.run(logrtheta.assign(np.random.multivariate_normal(logrthetav,invhess)))
+      sess.run(asimovrandomizestart)
     else:
       dofit = False
   elif options.toys == 0:
     print("Running fit to observed data")
-    sess.run(nobs.assign(data_obs))
+    sess.run(dataassign)
   else:
     print("Running toy %i" % itoy)
     if options.bootstrapData:
       #randomize from observed data
-      sess.run(nobs.assign(tf.random_poisson(nobs,shape=[],dtype=dtype)))
+      sess.run(bootstrapassign)
     else:
       #randomize from expectation
-      sess.run(nobs.assign(tf.random_poisson(nexp,shape=[],dtype=dtype)))  
+      sess.run(toyassign)
   
     if options.toysFrequentist:
       #randomize nuisance constraint minima
-      sess.run(theta0.assign(theta + tf.random_normal(shape=thetav.shape,dtype=dtype)))
-      thetatmp = sess.run(theta0)
-      logrthetatmp = np.concatenate((logrthetav[:npoi],thetatmp),axis=0)
-      sess.run(logrtheta.assign(logrthetatmp))
+      sess.run(frequentistassign)
+      #assign start values for nuisance parameters to constraint minima
+      sess.run(thetastartassign)
     else:
       #randomize actual values
-      sess.run(logrtheta.assign(tf.concat([logr,theta+tf.random_normal(shape=thetav.shape,dtype=dtype)],axis=0)))
+      sess.run(bayesassign)
 
+  #set likelihood offset
+  sess.run(nexpnomassign)
   if dofit:
-    #set likelihood offset
-    sess.run(nexpnom.assign(nexp))
-    minimizer = ScipyTROptimizerInterface(l, options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
     ret = minimizer.minimize(sess)
 
   xval, fval, gradval, hessval = sess.run([logrtheta,l,grad,hess])
