@@ -39,6 +39,11 @@ parser.add_option("","--randomizeStart", default=False, action='store_true', hel
 parser.add_option("","--tolerance", default=1e-3, type=float, help="convergence tolerance for minimizer")
 parser.add_option("","--expectSignal", default=1., type=float, help="rate multiplier for signal expectation (used for fit starting values and for toys)")
 parser.add_option("","--seed", default=123456789, type=int, help="random seed for toys")
+parser.add_option("","--fitverbose", default=0, type=int, help="verbosity level for fit")
+parser.add_option("","--minos", default=[], type="string", action="append", help="run minos on the specified variables")
+parser.add_option("","--scan", default=[], type="string", action="append", help="run likelihood scan on the specified variables")
+parser.add_option("","--scanPoints", default=16, type=int, help="default number of points for likelihood scan")
+parser.add_option("","--scanRange", default=3., type=float, help="default scan range in terms of hessian uncertainty")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -210,6 +215,10 @@ for proc in DC.processes:
   if DC.isSignal[proc]:
     signals.append(proc)
 
+systs = []
+for syst in DC.systs:
+  systs.append(syst[0])
+
 #build matrix of signal strength effects
 #hard-coded for now as one signal strength multiplier
 #per signal process
@@ -299,6 +308,34 @@ hess = tf.identity(hess,name="loss_hessian")
 
 hessinv = tf.matrix_inverse(hess)
 
+
+l0 = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
+x0 = tf.Variable(logrthetav,trainable=False)
+a = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
+errdir = tf.Variable(np.zeros_like(logrthetav,dtype=dtype),trainable=False)
+
+errproj = -tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
+
+dxconstraint = a + errproj
+dlconstraint = (l - l0)
+
+globalinit = tf.global_variables_initializer()
+nexpnomassign = tf.assign(nexpnom,nexp)
+asimovassign = tf.assign(nobs,nexp)
+asimovrandomizestart = tf.assign(logrtheta,tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample())
+dataassign = tf.assign(nobs,data_obs)
+bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
+toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
+frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=thetav.shape,dtype=dtype))
+thetastartassign = tf.assign(logrtheta, tf.concat([logr,theta0],axis=0))
+bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=thetav.shape,dtype=dtype)],axis=0))
+
+xtol = np.finfo(dtype).eps
+minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizerscan = ScipyTROptimizerInterface(l, var_list = [logrtheta],equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizerminos = ScipyTROptimizerInterface(errproj, var_list = [logrtheta],equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+
+
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
 tree = ROOT.TTree("fitresults", "fitresults")
@@ -315,60 +352,66 @@ tree.Branch('status',tstatus,'status/I')
 terrstatus = array('i',[0])
 tree.Branch('errstatus',terrstatus,'errstatus/I')
 
-tedmval = array('f',[0])
+tscanidx = array('i',[0])
+tree.Branch('scanidx',tscanidx,'scanidx/I')
+
+tedmval = array('f',[0.])
 tree.Branch('edmval',tedmval,'edmval/F')
+
+tnllval = array('f',[0.])
+tree.Branch('nllval',tnllval,'nllval/F')
+
+tdnllval = array('f',[0.])
+tree.Branch('dnllval',tdnllval,'dnllval/F')
 
 tsigvals = []
 tsigerrs = []
+tsigminosups = []
+tsigminosdowns = []
 for sig in signals:
   tsigval = array('f', [0.])
   tsigerr = array('f', [0.])
+  tsigminosup = array('f', [0.])
+  tsigminosdown = array('f', [0.])
   tsigvals.append(tsigval)
   tsigerrs.append(tsigerr)
+  tsigminosups.append(tsigminosup)
+  tsigminosdowns.append(tsigminosdown)
   tree.Branch(sig, tsigval, '%s/F' % sig)
   tree.Branch('%s_err' % sig, tsigerr, '%s_err/F' % sig)
+  tree.Branch('%s_minosup' % sig, tsigminosup, '%s_minosup/F' % sig)
+  tree.Branch('%s_minosdown' % sig, tsigminosdown, '%s_minosdown/F' % sig)
 
 tthetavals = []
 ttheta0vals = []
 tthetaerrs = []
+tthetaminosups = []
+tthetaminosdowns = []
 for syst in DC.systs:
   systname = syst[0]
   tthetaval = array('f', [0.])
   ttheta0val = array('f', [0.])
   tthetaerr = array('f', [0.])
+  tthetaminosup = array('f', [0.])
+  tthetaminosdown = array('f', [0.])
   tthetavals.append(tthetaval)
   ttheta0vals.append(ttheta0val)
   tthetaerrs.append(tthetaerr)
+  tthetaminosups.append(tthetaminosup)
+  tthetaminosdowns.append(tthetaminosdown)
   tree.Branch(systname, tthetaval, '%s/F' % systname)
   tree.Branch('%s_In' % systname, ttheta0val, '%s_In/F' % systname)
   tree.Branch('%s_err' % systname, tthetaerr, '%s_err/F' % systname)
-
-
-globalinit = tf.global_variables_initializer()
-nexpnomassign = tf.assign(nexpnom,nexp)
-asimovassign = tf.assign(nobs,nexp)
-asimovrandomizestart = tf.assign(logrtheta,tf.contrib.distributions.MultivariateNormalFullCovariance(logrtheta,hessinv).sample())
-dataassign = tf.assign(nobs,data_obs)
-bootstrapassign = tf.assign(nobs,tf.random_poisson(nobs,shape=[],dtype=dtype))
-toyassign = tf.assign(nobs,tf.random_poisson(nexp,shape=[],dtype=dtype))
-frequentistassign = tf.assign(theta0,theta + tf.random_normal(shape=thetav.shape,dtype=dtype))
-thetastartassign = tf.assign(logrtheta, tf.concat([logr,theta0],axis=0))
-bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=thetav.shape,dtype=dtype)],axis=0))
-
-
-xtol = np.finfo(dtype).eps
-minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': 3, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-
-#initialize tf session
-sess = tf.Session()
-sess.run(globalinit)
-
-print("min norm = %e" % np.amin(norm))
-print("min nexp = %e" % np.amin(sess.run(nexp)))
+  tree.Branch('%s_minosup' % systname, tthetaminosup, '%s_minosup/F' % systname)
+  tree.Branch('%s_minosdown' % systname, tthetaminosdown, '%s_minosdown/F' % systname)
 
 ntoys = options.toys
 if ntoys <= 0:
   ntoys = 1
+
+#initialize tf session
+sess = tf.Session()
+sess.run(globalinit)
 
 #set likelihood offset
 sess.run(nexpnomassign)
@@ -426,7 +469,8 @@ for itoy in range(ntoys):
   if dofit:
     ret = minimizer.minimize(sess)
 
-  xval, fval, gradval, hessval = sess.run([logrtheta,l,grad,hess])
+  xval, nllval, gradval, hessval = sess.run([logrtheta,l,grad,hess])
+  dnllval = 0.
 
   isposdef = np.all(np.greater_equal(np.linalg.eigvalsh(hessval),0.))
     
@@ -442,6 +486,8 @@ for itoy in range(ntoys):
   try:        
     invhess = np.linalg.inv(hessval)
     edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
+    
+    rawsigmasv = np.sqrt(np.diag(invhess))
     
     #transformation from logr to r for covariance matrix
     invhess = np.matmul(jac,np.matmul(invhess,jact))
@@ -459,31 +505,137 @@ for itoy in range(ntoys):
   else:
     status=1
     
-  print("status = %i, errstatus = %i, fval = %f, edmval = %e" % (status,errstatus,fval,edmval))
+  print("status = %i, errstatus = %i, nllval = %f, edmval = %e" % (status,errstatus,nllval,edmval))
   
+  
+  minoserrsup = -99.*np.ones_like(sigmasv)
+  minoserrsdown = -99.*np.ones_like(sigmasv)
+  for var in options.minos:
+    print("running minos-like algorithm for %s" % var)
+    if var in signals:
+      isSig = True
+      erridx = signals.index(var)
+    elif var in systs:
+      isSig = False
+      erridx = npoi + systs.index(var)
+    else:
+      raise Exception()
+      
+    l0.load(nllval+0.5,sess)
+    x0.load(xval,sess)
+
+    errdirv = np.zeros_like(logrthetav)
+    
+    errdirv[erridx] = 1./rawsigmasv[erridx]
+    errdir.load(errdirv,sess)
+    logrtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    minimizerminos.minimize(sess)
+    xvalminosup, nllvalminosup = sess.run([logrtheta,l])
+    dxvalup = xvalminosup[erridx]-xval[erridx]
+    if isSig:
+      dxvalup = math.exp(xvalminosup[erridx]) - math.exp(xval[erridx])
+    minoserrsup[erridx] = dxvalup
+
+    errdirv[erridx] = -1./rawsigmasv[erridx]
+    errdir.load(errdirv,sess)
+    logrtheta.load(xval + rawsigmasv[erridx]*rawsigmasv[erridx]*errdirv,sess)
+    minimizerminos.minimize(sess)
+    xvalminosdown, nllvalminosdown = sess.run([logrtheta,l])
+    dxvaldown = -(xvalminosdown[erridx]-xval[erridx])
+    if isSig:
+      dxvaldown = -(math.exp(xvalminosdown[erridx]) - math.exp(xval[erridx]))
+    minoserrsdown[erridx] = dxvaldown
+    
   tstatus[0] = status
   terrstatus[0] = errstatus
   tedmval[0] = edmval
+  tnllval[0] = nllval
+  tdnllval[0] = dnllval
+  tscanidx[0] = -1
   
   rsigmasv = sigmasv[:npoi]
   thetasigmasv = sigmasv[npoi:]
   
+  rminosups = minoserrsup[:npoi]
+  rminosdowns = minoserrsdown[:npoi]
+  
+  thetaminosups = minoserrsup[npoi:]
+  thetaminosdowns = minoserrsdown[npoi:]
+  
   theta0vals = sess.run(theta0)
-
-  for sig,sigval,sigma,tsigval,tsigerr in zip(signals,rvals,rsigmasv,tsigvals,tsigerrs):
+  
+  for sig,sigval,sigma,minosup,minosdown,tsigval,tsigerr,tsigminosup,tsigminosdown in zip(signals,rvals,rsigmasv,rminosups,rminosdowns,tsigvals,tsigerrs,tsigminosups,tsigminosdowns):
     tsigval[0] = sigval
     tsigerr[0] = sigma
+    tsigminosup[0] = minosup
+    tsigminosdown[0] = minosdown
     if itoy==0:
-      print('%s = %f +- %f' % (sig,sigval,sigma))
+      print('%s = %f +- %f (+%f -%f)' % (sig,sigval,sigma,minosup,minosdown))
 
-  for syst,thetaval,theta0val,sigma,tthetaval,ttheta0val,tthetaerr in zip(DC.systs,thetavals,theta0vals,thetasigmasv,tthetavals,ttheta0vals,tthetaerrs):
+  for syst,thetaval,theta0val,sigma,minosup,minosdown,tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown in zip(DC.systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns):
     tthetaval[0] = thetaval
     ttheta0val[0] = theta0val
     tthetaerr[0] = sigma
+    tthetaminosup[0] = minosup
+    tthetaminosdown[0] = minosdown
     if itoy==0:
-      print('%s = %f +- %f (%s_In = %f)' % (syst[0], thetaval, sigma, syst[0],theta0val))
+      print('%s = %f +- %f (+%f -%f) (%s_In = %f)' % (syst[0], thetaval, sigma, minosup,minosdown,syst[0],theta0val))
     
   tree.Fill()
+  
+  for var in options.scan:
+    print("running profile likelihood scan for %s" % var)
+    if var in signals:
+      isSig = True
+      erridx = signals.index(var)
+    elif var in systs:
+      isSig = False
+      erridx = npoi + systs.index(var)
+    else:
+      raise Exception()
+    
+    x0.load(xval,sess)
+    
+    errdirv = np.zeros_like(logrthetav)
+    errdirv[erridx] = 1./rawsigmasv[erridx]
+    errdir.load(errdirv,sess)
+        
+    dsigs = np.linspace(0.,options.scanRange,options.scanPoints)
+    signs = [1.,-1.]
+    
+    for sign in signs:
+      logrtheta.load(xval,sess)
+      for absdsig in dsigs:
+        dsig = sign*absdsig
+        
+        if absdsig==0. and sign==-1.:
+          continue
+        
+        a.load(dsig,sess)
+        minimizerscan.minimize(sess)
+    
+        xvalscan, nllvalscan = sess.run([logrtheta,l])
+        dnllvalscan = nllvalscan - nllval
+          
+        #get fit values
+        logrvals = xvalscan[:npoi]
+        thetavals = xvalscan[npoi:]  
+        
+        #transformation from logr to r
+        rvals = np.exp(logrvals)
+        
+        tscanidx[0] = erridx
+        tnllval[0] = nllvalscan
+        tdnllval[0] = dnllvalscan
+        
+        for sig,sigval,sigma,minosup,minosdown,tsigval,tsigerr,tsigminosup,tsigminosdown in zip(signals,rvals,rsigmasv,rminosups,rminosdowns,tsigvals,tsigerrs,tsigminosups,tsigminosdowns):
+          tsigval[0] = sigval
+        
+        for syst,thetaval,theta0val,sigma,minosup,minosdown,tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown in zip(DC.systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns):
+          tthetaval[0] = thetaval
+
+        tree.Fill()
+
 
 f.Write()
 f.Close()

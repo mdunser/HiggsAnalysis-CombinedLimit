@@ -13,6 +13,7 @@ from tensorflow.python.platform import tf_logging as logging
 from tensorflow.contrib.opt import ExternalOptimizerInterface
 
 from scipy.optimize import SR1
+from scipy.optimize import NonlinearConstraint
 
 
 __all__ = ['ScipyTROptimizerInterface']
@@ -37,9 +38,9 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
 
     constraints = []
     for func, grad_func in zip(equality_funcs, equality_grad_funcs):
-      constraints.append({'type': 'eq', 'fun': func, 'jac': grad_func})
+      constraints.append(NonlinearConstraint(func, 0.,0.,jac = grad_func, hess=SR1()))
     for func, grad_func in zip(inequality_funcs, inequality_grad_funcs):
-      constraints.append({'type': 'ineq', 'fun': func, 'jac': grad_func})
+      constraints.append(NonlinearConstraint(func, 0.,np.inf,jac = grad_func, hess=SR1()))
 
     import scipy.optimize  # pylint: disable=g-import-not-at-top
 
