@@ -166,10 +166,9 @@ for chan in DC.bins:
           normnpup = np.array(normhistup).astype(dtype)[1:-1]
           normnpup = np.reshape(normnpup,[-1,1])
           logkupsyst = kfac*np.log(normnpup/normnp)
-          if np.any(np.logical_and(np.equal(normnpup,0.),np.not_equal(normnp,0.))):
-            print(['up',chan,proc,name])
+          #if np.any(np.logical_and(np.equal(normnpup,0.),np.not_equal(normnp,0.))):
+            #print(['up',chan,proc,name])
           logkupsyst = np.where(np.equal(normnpup,0.),logkepsilon*np.ones_like(logkupsyst),logkupsyst)
-          #logkupsyst = np.where(np.equal(normnpup,0.),np.zeros_like(logkupsyst),logkupsyst)
           logkupsyst = np.where(np.equal(normnp,0.),np.zeros_like(logkupsyst),logkupsyst)
           logkupsyst = np.reshape(logkupsyst,[-1,1,1])
           
@@ -177,10 +176,9 @@ for chan in DC.bins:
           normnpdown = np.array(normhistdown).astype(dtype)[1:-1]
           normnpdown = np.reshape(normnpdown,[-1,1])
           logkdownsyst = -kfac*np.log(normnpdown/normnp)
-          if np.any(np.logical_and(np.equal(normnpdown,0.),np.not_equal(normnp,0.))):
-            print(['down',chan,proc,name])
+          #if np.any(np.logical_and(np.equal(normnpdown,0.),np.not_equal(normnp,0.))):
+            #print(['down',chan,proc,name])
           logkdownsyst = np.where(np.equal(normnpdown,0.),-logkepsilon*np.ones_like(logkdownsyst),logkdownsyst)
-          #logkdownsyst = np.where(np.equal(normnpdown,0.),np.zeros_like(logkdownsyst),logkdownsyst)
           logkdownsyst = np.where(np.equal(normnp,0.),np.zeros_like(logkdownsyst),logkdownsyst)
           logkdownsyst = np.reshape(logkdownsyst,[-1,1,1])
         else:
@@ -364,29 +362,52 @@ tree.Branch('nllval',tnllval,'nllval/F')
 tdnllval = array('f',[0.])
 tree.Branch('dnllval',tdnllval,'dnllval/F')
 
+tchisq = array('f',[0.])
+tree.Branch('chisq', tchisq, 'chisq/F')
+
+tchisqraw = array('f',[0.])
+tree.Branch('chisqraw', tchisqraw, 'chisqraw/F')
+
+tchisqpartial = array('f',[0.])
+tree.Branch('chisqpartial', tchisqpartial, 'chisqpartial/F')
+
+tchisqpartialraw = array('f',[0.])
+tree.Branch('chisqpartialraw', tchisqpartialraw, 'chisqpartialraw/F')
+
+tndof = array('i',[0])
+tree.Branch('ndof',tndof,'ndof/I')
+
+tndofpartial = array('i',[0])
+tree.Branch('ndofpartial',tndofpartial,'ndofpartial/I')
+
 tsigvals = []
 tsigerrs = []
 tsigminosups = []
 tsigminosdowns = []
+tsiggenvals = []
 for sig in signals:
   tsigval = array('f', [0.])
   tsigerr = array('f', [0.])
   tsigminosup = array('f', [0.])
   tsigminosdown = array('f', [0.])
+  tsiggenval = array('f', [0.])
   tsigvals.append(tsigval)
   tsigerrs.append(tsigerr)
   tsigminosups.append(tsigminosup)
   tsigminosdowns.append(tsigminosdown)
+  tsiggenvals.append(tsiggenval)
   tree.Branch(sig, tsigval, '%s/F' % sig)
   tree.Branch('%s_err' % sig, tsigerr, '%s_err/F' % sig)
   tree.Branch('%s_minosup' % sig, tsigminosup, '%s_minosup/F' % sig)
   tree.Branch('%s_minosdown' % sig, tsigminosdown, '%s_minosdown/F' % sig)
+  tree.Branch('%s_gen' % sig, tsiggenval, '%s_gen/F' % sig)
 
 tthetavals = []
 ttheta0vals = []
 tthetaerrs = []
 tthetaminosups = []
 tthetaminosdowns = []
+tthetagenvals = []
 for syst in DC.systs:
   systname = syst[0]
   tthetaval = array('f', [0.])
@@ -394,16 +415,19 @@ for syst in DC.systs:
   tthetaerr = array('f', [0.])
   tthetaminosup = array('f', [0.])
   tthetaminosdown = array('f', [0.])
+  tthetagenval = array('f', [0.])
   tthetavals.append(tthetaval)
   ttheta0vals.append(ttheta0val)
   tthetaerrs.append(tthetaerr)
   tthetaminosups.append(tthetaminosup)
   tthetaminosdowns.append(tthetaminosdown)
+  tthetagenvals.append(tthetagenval)
   tree.Branch(systname, tthetaval, '%s/F' % systname)
   tree.Branch('%s_In' % systname, ttheta0val, '%s_In/F' % systname)
   tree.Branch('%s_err' % systname, tthetaerr, '%s_err/F' % systname)
   tree.Branch('%s_minosup' % systname, tthetaminosup, '%s_minosup/F' % systname)
   tree.Branch('%s_minosdown' % systname, tthetaminosdown, '%s_minosdown/F' % systname)
+  tree.Branch('%s_gen' % systname, tthetagenval, '%s_gen/F' % systname)
 
 ntoys = options.toys
 if ntoys <= 0:
@@ -433,6 +457,8 @@ for itoy in range(ntoys):
 
   #reset all variables
   sess.run(globalinit)
+  logrtheta.load(logrthetav,sess)
+  xvalgen = logrthetav
     
   dofit = True
   
@@ -447,14 +473,7 @@ for itoy in range(ntoys):
     print("Running fit to observed data")
     sess.run(dataassign)
   else:
-    print("Running toy %i" % itoy)
-    if options.bootstrapData:
-      #randomize from observed data
-      sess.run(bootstrapassign)
-    else:
-      #randomize from expectation
-      sess.run(toyassign)
-  
+    print("Running toy %i" % itoy)  
     if options.toysFrequentist:
       #randomize nuisance constraint minima
       sess.run(frequentistassign)
@@ -463,6 +482,15 @@ for itoy in range(ntoys):
     else:
       #randomize actual values
       sess.run(bayesassign)
+      xvalgen = sess.run(logrtheta)
+      
+    if options.bootstrapData:
+      #randomize from observed data
+      sess.run(bootstrapassign)
+      xvalgen = -1.*np.ones_like(xvalgen)
+    else:
+      #randomize from expectation
+      sess.run(toyassign)      
 
   #set likelihood offset
   sess.run(nexpnomassign)
@@ -482,7 +510,29 @@ for itoy in range(ntoys):
   rvals = np.exp(logrvals)
   jac = np.diagflat(np.concatenate((rvals,np.ones_like(thetav)),axis=0))
   jact = np.transpose(jac)
+  
+  invjac = np.linalg.inv(jac)
+  invjact = np.transpose(invjac)
+  hessvaltrans = np.matmul(invjact,np.matmul(hessval,invjac))
+  
+  rvalsgen = np.exp(xvalgen[:npoi])
+  thetavalsgen = xvalgen[npoi:]
+  xvalgentrans = np.concatenate((rvalsgen,thetavalsgen),axis=0)
+  
+  xvaltrans = np.concatenate((rvals,thetavals),axis=0)
+  
+  dx = xvalgen - xval
+  dx = np.reshape(dx,[-1,1])
+  
+  dxtrans = xvalgentrans - xvaltrans
+  dxtrans = np.reshape(dxtrans,[-1,1])
+  
+  chisqraw = np.matmul(np.transpose(dx),np.matmul(hessval,dx))
+  chisq = np.matmul(np.transpose(dxtrans),np.matmul(hessvaltrans,dxtrans))
     
+  chisqpartialraw = np.matmul(np.transpose(dx[:npoi]),np.matmul(hessval[:npoi,:npoi],dx[:npoi]))
+  chisqpartial = np.matmul(np.transpose(dxtrans[:npoi]),np.matmul(hessvaltrans[:npoi,:npoi],dxtrans[:npoi]))
+      
   try:        
     invhess = np.linalg.inv(hessval)
     edmval = 0.5*np.matmul(np.matmul(np.transpose(gradval),invhess),gradval)
@@ -490,8 +540,8 @@ for itoy in range(ntoys):
     rawsigmasv = np.sqrt(np.diag(invhess))
     
     #transformation from logr to r for covariance matrix
-    invhess = np.matmul(jac,np.matmul(invhess,jact))
-    sigmasv = np.sqrt(np.diag(invhess))
+    invhesstrans = np.matmul(jac,np.matmul(invhess,jact))
+    sigmasv = np.sqrt(np.diag(invhesstrans))
     errstatus = 0
     if np.any(np.isnan(sigmasv)):
       errstatus = 1
@@ -552,6 +602,12 @@ for itoy in range(ntoys):
   tnllval[0] = nllval
   tdnllval[0] = dnllval
   tscanidx[0] = -1
+  tchisq[0] = chisq
+  tchisqraw[0] = chisqraw
+  tchisqpartial[0] = chisqpartial
+  tchisqpartialraw[0] = chisqpartialraw
+  tndof[0] = xval.shape[0]
+  tndofpartial[0] = npoi
   
   rsigmasv = sigmasv[:npoi]
   thetasigmasv = sigmasv[npoi:]
@@ -564,20 +620,22 @@ for itoy in range(ntoys):
   
   theta0vals = sess.run(theta0)
   
-  for sig,sigval,sigma,minosup,minosdown,tsigval,tsigerr,tsigminosup,tsigminosdown in zip(signals,rvals,rsigmasv,rminosups,rminosdowns,tsigvals,tsigerrs,tsigminosups,tsigminosdowns):
+  for sig,sigval,sigma,minosup,minosdown,siggenval,tsigval,tsigerr,tsigminosup,tsigminosdown,tsiggenval in zip(signals,rvals,rsigmasv,rminosups,rminosdowns,rvalsgen,tsigvals,tsigerrs,tsigminosups,tsigminosdowns,tsiggenvals):
     tsigval[0] = sigval
     tsigerr[0] = sigma
     tsigminosup[0] = minosup
     tsigminosdown[0] = minosdown
+    tsiggenval[0] = siggenval
     if itoy==0:
       print('%s = %f +- %f (+%f -%f)' % (sig,sigval,sigma,minosup,minosdown))
 
-  for syst,thetaval,theta0val,sigma,minosup,minosdown,tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown in zip(DC.systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns):
+  for syst,thetaval,theta0val,sigma,minosup,minosdown,thetagenval, tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown,tthetagenval in zip(DC.systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns,thetavalsgen, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns,tthetagenvals):
     tthetaval[0] = thetaval
     ttheta0val[0] = theta0val
     tthetaerr[0] = sigma
     tthetaminosup[0] = minosup
     tthetaminosdown[0] = minosdown
+    tthetagenval[0] = thetagenval
     if itoy==0:
       print('%s = %f +- %f (+%f -%f) (%s_In = %f)' % (syst[0], thetaval, sigma, minosup,minosdown,syst[0],theta0val))
     

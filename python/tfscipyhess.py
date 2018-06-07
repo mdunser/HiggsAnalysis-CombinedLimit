@@ -27,11 +27,6 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
                 equality_grad_funcs, inequality_funcs, inequality_grad_funcs,
                 packed_bounds, step_callback, optimizer_kwargs):
 
-    def loss_grad_func_wrapper(x):
-      # SciPy's L-BFGS-B Fortran implementation requires gradients as doubles.
-      loss, gradient = loss_grad_func(x)
-      return loss, gradient.astype('float64')
-
     optimizer_kwargs = dict(optimizer_kwargs.items())
     method = optimizer_kwargs.pop('method', self._DEFAULT_METHOD)
     hess = optimizer_kwargs.pop('hess', SR1())
@@ -44,7 +39,7 @@ class ScipyTROptimizerInterface(ExternalOptimizerInterface):
 
     import scipy.optimize  # pylint: disable=g-import-not-at-top
 
-    minimize_args = [loss_grad_func_wrapper, initial_val]
+    minimize_args = [loss_grad_func, initial_val]
     minimize_kwargs = {
         'jac': True,
         'hess' : hess,
