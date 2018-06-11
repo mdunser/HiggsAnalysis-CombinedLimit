@@ -44,6 +44,7 @@ parser.add_option("","--minos", default=[], type="string", action="append", help
 parser.add_option("","--scan", default=[], type="string", action="append", help="run likelihood scan on the specified variables")
 parser.add_option("","--scanPoints", default=16, type=int, help="default number of points for likelihood scan")
 parser.add_option("","--scanRange", default=3., type=float, help="default scan range in terms of hessian uncertainty")
+parser.add_option("","--allowNegativeExpectation", default=False, action='store_true', help="allow negative expectation")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -127,6 +128,8 @@ for chan in DC.bins:
       normhist = MB.getShape(chan,proc)
       normnp = np.array(normhist).astype(dtype)[1:-1]
       normnp = np.reshape(normnp,[-1,1])
+      if not options.allowNegativeExpectation:
+        normnp = np.maximum(normnp,0.)
     else:
       normnp = np.zeros([nbins,1],dtype=dtype)
       
@@ -166,20 +169,14 @@ for chan in DC.bins:
           normnpup = np.array(normhistup).astype(dtype)[1:-1]
           normnpup = np.reshape(normnpup,[-1,1])
           logkupsyst = kfac*np.log(normnpup/normnp)
-          #if np.any(np.logical_and(np.equal(normnpup,0.),np.not_equal(normnp,0.))):
-            #print(['up',chan,proc,name])
-          logkupsyst = np.where(np.equal(normnpup,0.),logkepsilon*np.ones_like(logkupsyst),logkupsyst)
-          logkupsyst = np.where(np.equal(normnp,0.),np.zeros_like(logkupsyst),logkupsyst)
+          logkupsyst = np.where(np.equal(np.sign(normnp*normnpup),1), logkupsyst, logkepsilon*np.ones_like(logkupsyst))
           logkupsyst = np.reshape(logkupsyst,[-1,1,1])
           
           normhistdown = MB.getShape(chan,proc,name+"Down")
           normnpdown = np.array(normhistdown).astype(dtype)[1:-1]
           normnpdown = np.reshape(normnpdown,[-1,1])
           logkdownsyst = -kfac*np.log(normnpdown/normnp)
-          #if np.any(np.logical_and(np.equal(normnpdown,0.),np.not_equal(normnp,0.))):
-            #print(['down',chan,proc,name])
-          logkdownsyst = np.where(np.equal(normnpdown,0.),-logkepsilon*np.ones_like(logkdownsyst),logkdownsyst)
-          logkdownsyst = np.where(np.equal(normnp,0.),np.zeros_like(logkdownsyst),logkdownsyst)
+          logkdownsyst = np.where(np.equal(np.sign(normnp*normnpdown),1), logkdownsyst, -logkepsilon*np.ones_like(logkdownsyst))
           logkdownsyst = np.reshape(logkdownsyst,[-1,1,1])
         else:
           logkupsyst = np.zeros([normnp.shape[0],1,1],dtype=dtype)
@@ -206,6 +203,8 @@ logkavg = 0.5*(logkup+logkdown)
 logkhalfdiff = 0.5*(logkup-logkdown)
 
 nexpnomv = np.sum(norm,axis=-1)
+
+print("nbins = %d, ntotal = %e, npoi = %d, nsyst = %d" % (nexpnomv.shape[0], np.sum(nexpnomv), npoi, nsyst))
 
 #list of signals preserving datacard order
 signals = []
@@ -312,9 +311,10 @@ x0 = tf.Variable(logrthetav,trainable=False)
 a = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 errdir = tf.Variable(np.zeros_like(logrthetav,dtype=dtype),trainable=False)
 
-errproj = -tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
+errproj = tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
+errprojsq = -0.5*tf.square(errproj)
 
-dxconstraint = a + errproj
+dxconstraint = a - errproj
 dlconstraint = (l - l0)
 
 globalinit = tf.global_variables_initializer()
@@ -331,8 +331,7 @@ bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=
 xtol = np.finfo(dtype).eps
 minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 minimizerscan = ScipyTROptimizerInterface(l, var_list = [logrtheta],equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-minimizerminos = ScipyTROptimizerInterface(errproj, var_list = [logrtheta],equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-
+minimizerminos = ScipyTROptimizerInterface(errprojsq, var_list = [logrtheta],equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
@@ -477,21 +476,21 @@ for itoy in range(ntoys):
     if options.toysFrequentist:
       #randomize nuisance constraint minima
       sess.run(frequentistassign)
-      #assign start values for nuisance parameters to constraint minima
-      sess.run(thetastartassign)
     else:
       #randomize actual values
-      sess.run(bayesassign)
-      xvalgen = sess.run(logrtheta)
+      sess.run(bayesassign)      
       
     if options.bootstrapData:
       #randomize from observed data
       sess.run(bootstrapassign)
       xvalgen = -1.*np.ones_like(xvalgen)
     else:
+      xvalgen = sess.run(logrtheta)
       #randomize from expectation
       sess.run(toyassign)      
 
+  #assign start values for nuisance parameters to constraint minima
+  sess.run(thetastartassign)
   #set likelihood offset
   sess.run(nexpnomassign)
   if dofit:
