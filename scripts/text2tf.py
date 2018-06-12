@@ -45,6 +45,7 @@ parser.add_option("","--scan", default=[], type="string", action="append", help=
 parser.add_option("","--scanPoints", default=16, type=int, help="default number of points for likelihood scan")
 parser.add_option("","--scanRange", default=3., type=float, help="default scan range in terms of hessian uncertainty")
 parser.add_option("","--allowNegativeExpectation", default=False, action='store_true', help="allow negative expectation")
+parser.add_option("","--freezePOIs", default=False, action='store_true', help="freeze POIs")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -76,6 +77,8 @@ print(options)
 nproc = len(DC.processes)
 nsyst = len(DC.systs)
 npoi = len(DC.signals)
+if options.freezePOIs:
+  npoi = 0
 
 dtype = 'float64'
 #dtype = 'float32'
@@ -208,9 +211,10 @@ print("nbins = %d, ntotal = %e, npoi = %d, nsyst = %d" % (nexpnomv.shape[0], np.
 
 #list of signals preserving datacard order
 signals = []
-for proc in DC.processes:
-  if DC.isSignal[proc]:
-    signals.append(proc)
+if not options.freezePOIs:
+  for proc in DC.processes:
+    if DC.isSignal[proc]:
+      signals.append(proc)
 
 systs = []
 for syst in DC.systs:
@@ -311,10 +315,9 @@ x0 = tf.Variable(logrthetav,trainable=False)
 a = tf.Variable(np.zeros([],dtype=dtype),trainable=False)
 errdir = tf.Variable(np.zeros_like(logrthetav,dtype=dtype),trainable=False)
 
-errproj = tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
-errprojsq = -0.5*tf.square(errproj)
+errproj = -tf.reduce_sum((logrtheta-x0)*errdir,axis=0)
 
-dxconstraint = a - errproj
+dxconstraint = a + errproj
 dlconstraint = (l - l0)
 
 globalinit = tf.global_variables_initializer()
@@ -331,7 +334,7 @@ bayesassign = tf.assign(logrtheta, tf.concat([logr,theta+tf.random_normal(shape=
 xtol = np.finfo(dtype).eps
 minimizer = ScipyTROptimizerInterface(l, var_list = [logrtheta], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 minimizerscan = ScipyTROptimizerInterface(l, var_list = [logrtheta],equalities=[dxconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
-minimizerminos = ScipyTROptimizerInterface(errprojsq, var_list = [logrtheta],equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
+minimizerminos = ScipyTROptimizerInterface(errproj, var_list = [logrtheta],equalities=[dlconstraint], options={'verbose': options.fitverbose, 'maxiter' : 100000, 'gtol' : 0., 'xtol' : xtol, 'barrier_tol' : 0.})
 
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
