@@ -63,9 +63,14 @@ theta0 = filter(lambda x: x.name == 'theta0:0', variables)[0]
 nexp = graph.get_tensor_by_name("nexp:0")
 nexpnom = graph.get_tensor_by_name("nexpnom:0")
 nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
+pmaskedexp = graph.get_tensor_by_name("pmaskedexp:0")
+maskedexp = graph.get_tensor_by_name("maskedexp:0")
+pmaskedexpnorm = graph.get_tensor_by_name("pmaskedexpnorm:0")
 
+cprocs = graph.get_tensor_by_name("cprocs:0")
 csignals = graph.get_tensor_by_name("csignals:0")
 csysts = graph.get_tensor_by_name("csysts:0")
+cmaskedchans = graph.get_tensor_by_name("cmaskedchans:0")
 
 dtype = logrtheta.dtype.as_numpy_dtype
 npoi = csignals.shape[0]
@@ -120,8 +125,9 @@ sess.run(globalinit)
 
 logrthetav = np.concatenate((math.log(options.expectSignal)*np.ones([npoi],dtype=dtype), np.zeros([nsyst],dtype=dtype)), axis=0)
 data_obs = sess.run(nobs)
-signals, systs = sess.run([csignals,csysts])
+procs, signals, systs, maskedchans = sess.run([cprocs,csignals,csysts,cmaskedchans])
 
+pmaskedexpvals = sess.run(pmaskedexp)
 
 #initialize output tree
 f = ROOT.TFile( 'fitresults_%i.root' % seed, 'recreate' )
@@ -191,6 +197,18 @@ for sig in signals:
   tree.Branch('%s_minosdown' % sig, tsigminosdown, '%s_minosdown/F' % sig)
   tree.Branch('%s_gen' % sig, tsiggenval, '%s_gen/F' % sig)
 
+tpmaskedexps = []
+tpmaskedexpnorms = []
+if len(maskedchans)>0:
+  for proc,pmaskedexpval in zip(procs,pmaskedexpvals):
+    tpmaskedexp = array('f', [1.])
+    tpmaskedexpnorm = array('f', [1.])
+    tpmaskedexps.append(tpmaskedexp)
+    tpmaskedexpnorms.append(tpmaskedexpnorm)
+    if pmaskedexpval > 0.:
+      tree.Branch('%s_pmaskedexp' % proc, tpmaskedexp, '%s_pmaskedexp/F' % proc)
+      tree.Branch('%s_pmaskedexpnorm' % proc, tpmaskedexpnorm, '%s_pmaskedexpnorm/F' % proc)
+
 tthetavals = []
 ttheta0vals = []
 tthetaerrs = []
@@ -217,6 +235,12 @@ for syst in systs:
   tree.Branch('%s_minosup' % systname, tthetaminosup, '%s_minosup/F' % systname)
   tree.Branch('%s_minosdown' % systname, tthetaminosdown, '%s_minosdown/F' % systname)
   tree.Branch('%s_gen' % systname, tthetagenval, '%s_gen/F' % systname)
+
+tmaskedexps = []
+for maskedchan in maskedchans:
+  tmaskedexp = array('f',[0.])
+  tmaskedexps.append(tmaskedexp)
+  tree.Branch('%s_maskedexp' % maskedchan, tmaskedexp, '%s_maskedexp/F' % maskedchan)
 
 ntoys = options.toys
 if ntoys <= 0:
@@ -291,6 +315,12 @@ for itoy in range(ntoys):
   #get fit values
   logrvals = xval[:npoi]
   thetavals = xval[npoi:]  
+  
+  theta0vals = sess.run(theta0)
+  
+  pmaskedexpvals = sess.run(pmaskedexp)
+  pmaskedexpnormvals = sess.run(pmaskedexpnorm)
+  maskedexpvals = sess.run(maskedexp)
   
   #transformation from logr to r
   rvals = np.exp(logrvals)
@@ -403,9 +433,7 @@ for itoy in range(ntoys):
   
   thetaminosups = minoserrsup[npoi:]
   thetaminosdowns = minoserrsdown[npoi:]
-  
-  theta0vals = sess.run(theta0)
-  
+    
   for sig,sigval,sigma,minosup,minosdown,siggenval,tsigval,tsigerr,tsigminosup,tsigminosdown,tsiggenval in zip(signals,rvals,rsigmasv,rminosups,rminosdowns,rvalsgen,tsigvals,tsigerrs,tsigminosups,tsigminosdowns,tsiggenvals):
     tsigval[0] = sigval
     tsigerr[0] = sigma
@@ -414,6 +442,13 @@ for itoy in range(ntoys):
     tsiggenval[0] = siggenval
     if itoy==0:
       print('%s = %f +- %f (+%f -%f)' % (sig,sigval,sigma,minosup,minosdown))
+
+  for proc,pmaskedexpval,pmaskedexpnormval, tpmaskedexp, tpmaskedexpnorm in zip(procs,pmaskedexpvals,pmaskedexpnormvals,tpmaskedexps,tpmaskedexpnorms):
+    tpmaskedexp[0] = pmaskedexpval
+    tpmaskedexpnorm[0] = pmaskedexpnormval
+    
+  for maskedchan,maskedexpval,tmaskedexp in zip(maskedchans,maskedexpvals,tmaskedexps):
+    tmaskedexp[0] = maskedexpval
 
   for syst,thetaval,theta0val,sigma,minosup,minosdown,thetagenval, tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown,tthetagenval in zip(systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns,thetavalsgen, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns,tthetagenvals):
     tthetaval[0] = thetaval
@@ -468,12 +503,23 @@ for itoy in range(ntoys):
         #transformation from logr to r
         rvals = np.exp(logrvals)
         
+        pmaskedexpvals = sess.run(pmaskedexp)
+        pmaskedexpnormvals = sess.run(pmaskedexpnorm)
+        maskedexpvals = sess.run(maskedexp)
+        
         tscanidx[0] = erridx
         tnllval[0] = nllvalscan
         tdnllval[0] = dnllvalscan
         
         for sig,sigval,sigma,minosup,minosdown,tsigval,tsigerr,tsigminosup,tsigminosdown in zip(signals,rvals,rsigmasv,rminosups,rminosdowns,tsigvals,tsigerrs,tsigminosups,tsigminosdowns):
           tsigval[0] = sigval
+          
+        for proc,pmaskedexpval,pmaskedexpnormval, tpmaskedexp, tpmaskedexpnorm in zip(procs,pmaskedexpvals,pmaskedexpnormvals,tpmaskedexps,tpmaskedexpnorms):
+          tpmaskedexp[0] = pmaskedexpval
+          tpmaskedexpnorm[0] = pmaskedexpnormval
+          
+        for maskedchan,maskedexpval,tmaskedexp in zip(maskedchans,maskedexpvals,tmaskedexps):
+          tmaskedexp[0] = maskedexpval
         
         for syst,thetaval,theta0val,sigma,minosup,minosdown,tthetaval,ttheta0val,tthetaerr,tthetaminosup,tthetaminosdown in zip(DC.systs,thetavals,theta0vals,thetasigmasv,thetaminosups,thetaminosdowns, tthetavals,ttheta0vals,tthetaerrs,tthetaminosups,tthetaminosdowns):
           tthetaval[0] = thetaval
