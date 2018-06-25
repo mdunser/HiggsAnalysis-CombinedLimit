@@ -24,7 +24,7 @@ from HiggsAnalysis.CombinedLimit.DatacardParser import *
 from HiggsAnalysis.CombinedLimit.ModelTools import *
 from HiggsAnalysis.CombinedLimit.ShapeTools import *
 from HiggsAnalysis.CombinedLimit.PhysicsModel import *
-from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface
+from HiggsAnalysis.CombinedLimit.tfscipyhess import ScipyTROptimizerInterface,jacobian
 
 parser = OptionParser(usage="usage: %prog [options] datacard.txt -o output \nrun with --help to get list of options")
 addDatacardParserOptions(parser)
@@ -32,8 +32,11 @@ parser.add_option("-P", "--physics-model", dest="physModel", default="HiggsAnaly
 parser.add_option("--PO", "--physics-option", dest="physOpt", default=[],  type="string", action="append", help="Pass a given option to the physics model (can specify multiple times)")
 parser.add_option("", "--dump-datacard", dest="dumpCard", default=False, action='store_true',  help="Print to screen the DataCard as a python config and exit")
 parser.add_option("","--allowNegativeExpectation", default=False, action='store_true', help="allow negative expectation")
-parser.add_option("","--freezePOIs", default=False, action='store_true', help="freeze POIs")
+parser.add_option("","--POIMode", default="mu",type="string", help="mode for POI's")
+parser.add_option("","--nonNegativePOI", default=True, action='store_true', help="force signal strengths to be non-negative")
+parser.add_option("","--POIDefault", default=1., type=float, help="mode for POI's")
 parser.add_option("","--maskedChan", default=[], type="string",action="append", help="channels to be masked in likelihood but propagated through for later storage/analysis")
+parser.add_option("-S","--doSystematics", type=int, default=1, help="enable systematics")
 (options, args) = parser.parse_args()
 
 if len(args) == 0:
@@ -58,8 +61,7 @@ if options.dumpCard:
 print(options)
 
 nproc = len(DC.processes)
-nsyst = len(DC.systs)
-npoi = len(DC.signals)
+nsignals = len(DC.signals)
 
 dtype = 'float64'
 
@@ -77,15 +79,17 @@ for proc in DC.processes:
 
 #list of signals preserving datacard order
 signals = []
-if not options.freezePOIs:
-  for proc in DC.processes:
-    if DC.isSignal[proc]:
-      signals.append(proc)
+for proc in DC.processes:
+  if DC.isSignal[proc]:
+    signals.append(proc)
       
 #list of systematic uncertainties (nuisances)
 systs = []
-for syst in DC.systs:
-  systs.append(syst[0])
+if options.doSystematics:
+  for syst in DC.systs:
+    systs.append(syst[0])
+  
+nsyst = len(systs)  
   
 #list of channels, ordered such that masked channels are last
 chans = []
@@ -151,7 +155,7 @@ for chan in chans:
       
     logkupproc = np.empty([nbins,1,0],dtype=dtype)
     logkdownproc = np.empty([nbins,1,0],dtype=dtype)
-    for syst in DC.systs:
+    for syst in DC.systs[:nsyst]:
       name = syst[0]
       stype = syst[2]
       
@@ -215,14 +219,37 @@ for chan in chans:
   
   nbinstotal += nbins
     
-print(np.max(np.abs(logkup)))
-print(np.max(np.abs(logkdown)))
+#print(np.max(np.abs(logkup)))
+#print(np.max(np.abs(logkdown)))
   
 logkavg = 0.5*(logkup+logkdown)
 logkhalfdiff = 0.5*(logkup-logkdown)
 
-#discard masked channels where not needed
-data_obs = data_obs[:nbinstotal-nbinsmasked]
+if options.nonNegativePOI:
+  boundmode = 1
+else:
+  boundmode = 0
+
+pois = []  
+  
+if options.POIMode == "mu":
+  npoi = nsignals
+  poidefault = options.POIDefault*np.ones([npoi],dtype=dtype)
+  for signal in signals:
+    pois.append("%s_%s" % (signal,options.POIMode))
+elif options.POIMode == "none":
+  npoi = 0
+  poidefault = np.empty([],dtype=dtype)
+else:
+  raise Exception("unsupported POIMode")
+
+nparms = npoi + nsyst
+parms = pois + systs
+
+if boundmode==0:
+  xpoidefault = poidefault
+elif boundmode==1:
+  xpoidefault = np.sqrt(poidefault)
 
 print("nbins = %d, npoi = %d, nsyst = %d" % (data_obs.shape[0], npoi, nsyst))
 
@@ -230,24 +257,28 @@ cprocs = tf.constant(procs,name="cprocs")
 csignals = tf.constant(signals,name="csignals")
 csysts = tf.constant(systs,name="csysts")
 cmaskedchans = tf.constant(maskedchans,name="cmaskedchans")
+cpois = tf.constant(pois,name="cpois")
 
 #data
-#nobs = tf.placeholder(dtype, shape=data_obs.shape)
 nobs = tf.Variable(data_obs, trainable=False, name="nobs")
 theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
 
 #tf variable containing all fit parameters
-logrtheta = tf.Variable(tf.zeros([npoi+nsyst],dtype=dtype), name="logrtheta")
 
-#split back into signal strengths and nuisances
-logr = logrtheta[:npoi]
-theta = logrtheta[npoi:]
+x = tf.Variable(tf.concat([xpoidefault,tf.zeros([nsyst],dtype=dtype)], axis=0), name="x")
 
-logr = tf.identity(logr,name="logr")
-theta = tf.identity(theta,name="theta")
+xpoi = x[:npoi]
+theta = x[npoi:]
 
-#vector encoding effect of signal strengths
-logrnorm = tf.concat([logr,tf.zeros([nproc-npoi],dtype=dtype)],axis=0)
+if boundmode == 0:
+  poi = xpoi
+elif boundmode == 1:
+  poi = tf.square(xpoi)
+  jacpoitheta = tf.diag(tf.concat([2.*xpoi,tf.ones([nsyst],dtype=dtype)],axis=0))
+
+xpoi = tf.identity(poi, name="xpoi")
+poi = tf.identity(poi, name=options.POIMode)
+theta = tf.identity(theta, name="theta")
 
 #interpolation for asymmetric log-normal
 twox = 2.*theta
@@ -258,21 +289,24 @@ logk = logkavg + alpha*logkhalfdiff
 
 #matrix encoding effect of nuisance parameters
 logsnorm = tf.reduce_sum(logk*theta,axis=-1)
+snorm = tf.exp(logsnorm)
 
-logrsnorm = logrnorm + logsnorm
-rsnorm = tf.exp(logrsnorm)
+#vector encoding effect of signal strengths
+if options.POIMode == "mu":
+  r = poi
+elif options.POIMode == "none":
+  r = tf.ones([nsignals],dtype=dtype)
+
+rnorm = tf.concat([r,tf.ones([nproc-nsignals],dtype=dtype)],axis=0)
+rnorm = tf.reshape(rnorm,[1,-1])
 
 #final expected yields per-bin including effect of signal
 #strengths and nuisance parmeters
-pnormfull = rsnorm*norm
+pnormfull = rnorm*snorm*norm
 if nbinsmasked>0:
   pnorm = pnormfull[:nbinstotal-nbinsmasked]
 else:
   pnorm = pnormfull
-  
-print(pnorm.shape)
-  
-pnormmasked = pnormfull[nbinstotal-nbinsmasked:]
   
 nexp = tf.reduce_sum(pnorm,axis=-1)
 nexp = tf.identity(nexp,name='nexp')
@@ -283,7 +317,6 @@ lognexp = tf.log(nexpsafe)
 nexpnom = tf.Variable(nexp, trainable=False, name="nexpnom")
 nexpnomsafe = tf.where(tf.equal(nobs,tf.zeros_like(nobs)), tf.ones_like(nobs), nexpnom)
 lognexpnom = tf.log(nexpnomsafe)
-
 
 #final likelihood computation
 
@@ -302,10 +335,11 @@ l = tf.identity(l,name="loss")
 lfull = lnfull + lc
 lfull = tf.identity(lfull,name="lossfull")
 
+pnormmasked = pnormfull[nbinstotal-nbinsmasked:,:nsignals]
 pmaskedexp = tf.reduce_sum(pnormmasked, axis=0)
 pmaskedexp = tf.identity(pmaskedexp, name="pmaskedexp")
 
-maskedexp = tf.reduce_sum(pnormmasked, axis=-1)
+maskedexp = tf.reduce_sum(pnormmasked, axis=-1,keepdims=True)
 maskedexp = tf.identity(maskedexp,"maskedexp")
 
 if nbinsmasked>0:
@@ -313,6 +347,46 @@ if nbinsmasked>0:
 else:
   pmaskedexpnorm = pmaskedexp
 pmaskedexpnorm = tf.identity(pmaskedexpnorm,"pmaskedexpnorm")
+
+grad = tf.gradients(l,x)[0]
+hess = tf.hessians(l,x)[0]
+hesseigvals = tf.self_adjoint_eigvals(hess)
+mineigval = tf.reduce_min(hesseigvals)
+isposdef = tf.greater(mineigval,0.)
+gradcol = tf.reshape(grad,[-1,1])
+
+invalidinvhess = -99.*tf.eye(nparms,dtype=dtype)
+invhess = tf.cond(isposdef,lambda: tf.matrix_inverse(hess), lambda: invalidinvhess)
+edm = 0.5*tf.matmul(tf.matmul(gradcol,invhess,transpose_a=True),gradcol)
+
+isposdef = tf.identity(isposdef,name="isposdef")
+edm = tf.identity(edm,name="edm")
+invhess = tf.identity(invhess,name="invhess")
+
+
+if boundmode>0:
+  invhesspoitheta = tf.matmul(jacpoitheta,tf.matmul(invhess,jacpoitheta,transpose_b=True))
+else:
+  invhesspoitheta = invhess
+  
+outputs = []
+invhessoutputs = []
+
+outputs.append(poi)
+if nbinsmasked>0:
+  outputs.append(pmaskedexp)
+  outputs.append(pmaskedexpnorm)
+
+invhessoutputs.append(invhesspoitheta)
+for output in outputs[1:]:
+  outtheta = tf.concat([output,theta],axis=0)
+  jac = jacobian(outtheta,x)
+  invhessout = tf.matmul(jac,tf.matmul(invhess,jac,transpose_b=True))
+  invhessoutputs.append(invhessout)
+  
+for output,invhessout in zip(outputs,invhessoutputs):
+  tf.add_to_collection("outputs",output)
+  tf.add_to_collection("invhessoutputs",invhessout)
 
 basename = '.'.join(options.fileName.split('.')[:-1])
 tf.train.export_meta_graph(filename='%s.meta' % basename)
