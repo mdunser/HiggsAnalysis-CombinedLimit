@@ -236,7 +236,7 @@ if options.POIMode == "mu":
   npoi = nsignals
   poidefault = options.POIDefault*np.ones([npoi],dtype=dtype)
   for signal in signals:
-    pois.append("%s_%s" % (signal,options.POIMode))
+    pois.append(signal)
 elif options.POIMode == "none":
   npoi = 0
   poidefault = np.empty([],dtype=dtype)
