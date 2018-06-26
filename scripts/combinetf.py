@@ -77,7 +77,7 @@ csysts = graph.get_tensor_by_name("csysts:0")
 cpois = graph.get_tensor_by_name("cpois:0")
 
 dtype = x.dtype.as_numpy_dtype
-npoi = csignals.shape[0]
+npoi = cpois.shape[0]
 nsyst = csysts.shape[0]
 nparms = npoi + nsyst
 

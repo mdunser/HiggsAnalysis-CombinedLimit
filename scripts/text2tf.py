@@ -264,8 +264,13 @@ nobs = tf.Variable(data_obs, trainable=False, name="nobs")
 theta0 = tf.Variable(tf.zeros([nsyst],dtype=dtype), trainable=False, name="theta0")
 
 #tf variable containing all fit parameters
-
-x = tf.Variable(tf.concat([xpoidefault,tf.zeros([nsyst],dtype=dtype)], axis=0), name="x")
+thetadefault = tf.zeros([nsyst],dtype=dtype)
+if npoi>0:
+  xdefault = tf.concat([xpoidefault,thetadefault], axis=0)
+else:
+  xdefault = thetadefault
+  
+x = tf.Variable(xdefault, name="x")
 
 xpoi = x[:npoi]
 theta = x[npoi:]
