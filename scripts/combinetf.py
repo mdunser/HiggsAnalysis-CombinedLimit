@@ -66,6 +66,7 @@ nobs = filter(lambda x: x.name == 'nobs:0', variables)[0]
 
 
 invhess = graph.get_tensor_by_name("invhess:0")
+hesseigvals = graph.get_tensor_by_name("hesseigvals:0")
 mineigval = graph.get_tensor_by_name("mineigval:0")
 isposdef = graph.get_tensor_by_name("isposdef:0")
 edm = graph.get_tensor_by_name("edm:0")
@@ -326,7 +327,6 @@ for itoy in range(ntoys):
   
   print("status = %i, errstatus = %i, nllval = %f, edmval = %e, mineigval = %e" % (status,errstatus,nllval,edmval,mineig))  
   
-  
   fullsigmasv = np.sqrt(np.diag(invhessval))
   if status==0:
     thetasigmasv = fullsigmasv[npoi:]
@@ -365,7 +365,7 @@ for itoy in range(ntoys):
       erroutidx = systs.index(var)
       erridx = npoi + erroutidx
       minoserrsup = thetaminosups
-      minoserrsdown = thetaminosdown
+      minoserrsdown = thetaminosdowns
       scanname = "x"
       outthetaval = xval
       sigmas = thetasigmasv
@@ -508,7 +508,7 @@ for itoy in range(ntoys):
           for outval, toutval in zip(outvals,toutvals):
             toutval[0] = outval
         
-        for thetval, tthetaval in zip(scanthetavals,tthetavals):
+        for thetaval, tthetaval in zip(scanthetavals,tthetavals):
           tthetaval[0] = thetaval
 
         tree.Fill()

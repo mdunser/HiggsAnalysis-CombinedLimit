@@ -364,6 +364,7 @@ invalidinvhess = -99.*tf.eye(nparms,dtype=dtype)
 invhess = tf.cond(isposdef,lambda: tf.matrix_inverse(hess), lambda: invalidinvhess)
 edm = 0.5*tf.matmul(tf.matmul(gradcol,invhess,transpose_a=True),gradcol)
 
+hesseigvals = tf.identity(mineigval,name="hesseigvals")
 mineigval = tf.identity(mineigval,name="mineigval")
 isposdef = tf.identity(isposdef,name="isposdef")
 edm = tf.identity(edm,name="edm")
