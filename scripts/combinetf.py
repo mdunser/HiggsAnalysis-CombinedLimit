@@ -342,12 +342,33 @@ for itoy in range(ntoys):
   outminosupd = {}
   outminosdownd = {}
 
+  nTotPars = len(pois+systs)
+  
+  if not options.toys > 0:
+    correlationHist = ROOT.TH2D('correlation_matrix', 'correlation matrix for '+('asimov' if options.toys < 0 else 'data fit'), nTotPars, 0., nTotPars, nTotPars, 0, nTotPars)
+    correlationHist.GetZaxis().SetRangeUser(-1., 1.)
+
   for output, outvals,invhessoutval in zip(outputs, outvalss,invhessoutvals):
     outname = ":".join(output.name.split(":")[:-1])    
     if status==0:
       sigmasv = np.sqrt(np.diag(invhessoutval))[:npoi]
+      if not options.toys > 0:
+        parameterErrors = np.sqrt(np.diag(invhessoutval))
+        variances2D     = parameterErrors[np.newaxis].T * parameterErrors
+        correlationMatrix = np.divide(invhessoutval, variances2D)
+        for ip1, p1 in enumerate(pois+systs):
+          for ip2, p2 in enumerate(pois+systs):
+            correlationHist.SetBinContent(ip1+1, ip2+1, correlationMatrix[ip1][ip2])
+            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
     else:
       sigmasv = -99.*np.ones_like(outvals)
+      if not options.toys > 0:
+        for ip1, p1 in enumerate(pois+systs):
+          for ip2, p2 in enumerate(pois+systs):
+            correlationHist.SetBinContent(ip1+1, ip2+1, -1.)
+            correlationHist.GetXaxis().SetBinLabel(ip1+1, p1)
+            correlationHist.GetYaxis().SetBinLabel(ip2+1, p2)
     
     minoserrsup = -99.*np.ones_like(sigmasv)
     minoserrsdown = -99.*np.ones_like(sigmasv)
